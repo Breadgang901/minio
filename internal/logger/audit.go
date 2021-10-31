@@ -61,6 +61,30 @@ func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
 	}
 }
 
+// ReadFrom implements io.ReaderFrom to ensure sendfile/splice optimization works.
+func (lrw *ResponseWriter) ReadFrom(r io.Reader) (n int64, err error) {
+	if !lrw.headersLogged {
+		// We assume the response code to be '200 OK' when WriteHeader() is not called,
+		// that way following Golang HTTP response behavior.
+		lrw.WriteHeader(http.StatusOK)
+	}
+	if (lrw.LogErrBody && lrw.StatusCode >= http.StatusBadRequest) || lrw.LogAllBody {
+		// Always logging error responses.
+		r = io.TeeReader(r, &lrw.body)
+	}
+	rf, ok := lrw.ResponseWriter.(io.ReaderFrom)
+	if ok {
+		n, err = rf.ReadFrom(r)
+	} else {
+		n, err = io.Copy(lrw.ResponseWriter, r)
+	}
+	lrw.bytesWritten += int(n)
+	if lrw.TimeToFirstByte == 0 {
+		lrw.TimeToFirstByte = time.Now().UTC().Sub(lrw.StartTime)
+	}
+	return n, err
+}
+
 func (lrw *ResponseWriter) Write(p []byte) (int, error) {
 	if !lrw.headersLogged {
 		// We assume the response code to be '200 OK' when WriteHeader() is not called,
@@ -75,9 +99,6 @@ func (lrw *ResponseWriter) Write(p []byte) (int, error) {
 	if (lrw.LogErrBody && lrw.StatusCode >= http.StatusBadRequest) || lrw.LogAllBody {
 		// Always logging error responses.
 		lrw.body.Write(p)
-	}
-	if err != nil {
-		return n, err
 	}
 	return n, err
 }

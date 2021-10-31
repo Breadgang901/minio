@@ -22,6 +22,7 @@ import (
 	"context"
 	"io"
 	goioutil "io/ioutil"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -62,8 +63,31 @@ func TestDeadlineWriter(t *testing.T) {
 	}
 }
 
+type dummyWriter struct{}
+
+func (w *dummyWriter) Header() http.Header {
+	return map[string][]string{}
+}
+
+func (w *dummyWriter) Write(b []byte) (int, error) {
+	return len(b), nil
+}
+
+func (w *dummyWriter) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(goioutil.Discard, r)
+}
+
+func (w *dummyWriter) WriteHeader(statusCode int) {
+}
+
+type dummyReader struct{}
+
+func (w *dummyReader) Read(b []byte) (int, error) {
+	return len(b), nil
+}
+
 func TestCloseOnWriter(t *testing.T) {
-	writer := WriteOnClose(goioutil.Discard)
+	writer := WriteOnClose(&dummyWriter{})
 	if writer.HasWritten() {
 		t.Error("WriteOnCloser must not be marked as HasWritten")
 	}
@@ -72,8 +96,14 @@ func TestCloseOnWriter(t *testing.T) {
 		t.Error("WriteOnCloser must be marked as HasWritten")
 	}
 
-	writer = WriteOnClose(goioutil.Discard)
+	writer = WriteOnClose(&dummyWriter{})
 	writer.Close()
+	if !writer.HasWritten() {
+		t.Error("WriteOnCloser must be marked as HasWritten")
+	}
+
+	writer = WriteOnClose(&dummyWriter{})
+	io.Copy(writer, io.LimitReader(&dummyReader{}, 1)) // ReadFrom will be called.
 	if !writer.HasWritten() {
 		t.Error("WriteOnCloser must be marked as HasWritten")
 	}

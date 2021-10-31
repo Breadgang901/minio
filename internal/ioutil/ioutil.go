@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -36,13 +37,25 @@ import (
 // one write operation must happen to send the HTTP headers
 // to the peer.
 type WriteOnCloser struct {
-	io.Writer
+	http.ResponseWriter
 	hasWritten bool
+}
+
+// ReadFrom - io.ReaderFrom interface compatibility.
+func (w *WriteOnCloser) ReadFrom(r io.Reader) (n int64, err error) {
+	w.hasWritten = true
+	rf, ok := w.ResponseWriter.(io.ReaderFrom)
+	if ok {
+		n, err = rf.ReadFrom(r)
+	} else {
+		n, err = io.Copy(w.ResponseWriter, r)
+	}
+	return n, err
 }
 
 func (w *WriteOnCloser) Write(p []byte) (int, error) {
 	w.hasWritten = true
-	return w.Writer.Write(p)
+	return w.ResponseWriter.Write(p)
 }
 
 // Close closes the WriteOnCloser. It behaves like io.Closer.
@@ -53,7 +66,7 @@ func (w *WriteOnCloser) Close() error {
 			return err
 		}
 	}
-	if closer, ok := w.Writer.(io.Closer); ok {
+	if closer, ok := w.ResponseWriter.(io.Closer); ok {
 		return closer.Close()
 	}
 	return nil
@@ -63,7 +76,7 @@ func (w *WriteOnCloser) Close() error {
 func (w *WriteOnCloser) HasWritten() bool { return w.hasWritten }
 
 // WriteOnClose takes an io.Writer and returns an ioutil.WriteOnCloser.
-func WriteOnClose(w io.Writer) *WriteOnCloser {
+func WriteOnClose(w http.ResponseWriter) *WriteOnCloser {
 	return &WriteOnCloser{w, false}
 }
 

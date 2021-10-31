@@ -48,6 +48,20 @@ type OutgoingTrafficMeter struct {
 	http.ResponseWriter
 }
 
+// ReadFrom io.ReaderFrom interface compliance to ensure sendfile/splice
+// optimization works on Linux.
+func (w *OutgoingTrafficMeter) ReadFrom(r io.Reader) (n int64, err error) {
+	rf, ok := w.ResponseWriter.(io.ReaderFrom)
+	if ok {
+		n, err = rf.ReadFrom(r)
+	} else {
+		n, err = io.Copy(w.ResponseWriter, r)
+	}
+	w.countBytes += n
+	return n, err
+
+}
+
 // Write calls the underlying write and counts the output bytes
 func (w *OutgoingTrafficMeter) Write(p []byte) (n int, err error) {
 	n, err = w.ResponseWriter.Write(p)
