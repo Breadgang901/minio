@@ -19,11 +19,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/minio/minio/internal/bucket/lifecycle"
 	xhttp "github.com/minio/minio/internal/http"
 )
 
@@ -263,4 +265,70 @@ func setPutObjHeaders(w http.ResponseWriter, objInfo ObjectInfo, delete bool) {
 			lc.SetPredictionHeaders(w, objInfo.ToLifecycleOpts())
 		}
 	}
+}
+
+// ilmLimitNoncurrentVersions limits the number of noncurrent versions of an
+// object based on lifecycle rules configured on the bucket.
+func ilmLimitNoncurrentVersions(ctx context.Context, objectAPI ObjectLayer, bucket, object string) (err error) {
+	var lc *lifecycle.Lifecycle
+	if lc, err = globalLifecycleSys.Get(bucket); err != nil {
+		if errors.Is(err, BucketLifecycleNotFound{Bucket: bucket}) {
+			return nil
+		}
+		return err
+	}
+
+	objOpts := lifecycle.ObjectOpts{Name: object}
+	lim := lc.NoncurrentVersionsExpirationLimit(objOpts)
+	if lim == 0 { // no limit set
+		return nil
+	}
+
+	var (
+		noncurrentVersions []ObjectToDelete
+		info               ListObjectVersionsInfo
+		keep               int
+	)
+	for {
+		info, err = objectAPI.ListObjectVersions(ctx, bucket, object, info.NextMarker, info.NextVersionIDMarker, "", 1000)
+		if err != nil {
+			return err
+		}
+
+		for _, objInfo := range info.Objects {
+			if objInfo.IsLatest {
+				continue // skip current version
+			}
+			keep++
+			if keep <= lim {
+				continue
+			}
+			noncurrentVersions = append(noncurrentVersions, ObjectToDelete{
+				ObjectName: objInfo.Name,
+				VersionID:  objInfo.VersionID,
+			})
+		}
+
+		if !info.IsTruncated {
+			break
+		}
+	}
+
+	if len(noncurrentVersions) == 0 {
+		return nil
+	}
+
+	_, errs := objectAPI.DeleteObjects(ctx, bucket, noncurrentVersions, ObjectOptions{
+		Versioned:        globalBucketVersioningSys.Enabled(bucket),
+		VersionSuspended: globalBucketVersioningSys.Suspended(bucket),
+	})
+
+	// return the first among possibly many errors simply to notify the
+	// caller that the call was not fully successful.
+	for _, delErr := range errs {
+		if delErr != nil {
+			return delErr
+		}
+	}
+	return nil
 }

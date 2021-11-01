@@ -1511,7 +1511,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 		// Schedule object for immediate transition if eligible.
 		enqueueTransitionImmediate(objInfo)
 	}
-
+	logger.LogIf(ctx, ilmLimitNoncurrentVersions(ctx, objectAPI, dstBucket, dstObject))
 }
 
 // PutObjectHandler - PUT Object
@@ -1860,6 +1860,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		enqueueTransitionImmediate(objInfo)
 		logger.LogIf(ctx, os.Sweep())
 	}
+	logger.LogIf(ctx, ilmLimitNoncurrentVersions(ctx, objectAPI, bucket, object))
 }
 
 // PutObjectExtractHandler - PUT Object extract is an extended API
@@ -3317,6 +3318,7 @@ func (api objectAPIHandlers) CompleteMultipartUploadHandler(w http.ResponseWrite
 		enqueueTransitionImmediate(objInfo)
 		logger.LogIf(ctx, os.Sweep())
 	}
+	logger.LogIf(ctx, ilmLimitNoncurrentVersions(ctx, objectAPI, bucket, object))
 }
 
 /// Delete objectAPIHandlers
