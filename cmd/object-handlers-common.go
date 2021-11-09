@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/minio/minio/internal/bucket/lifecycle"
+	"github.com/minio/minio/internal/event"
 	xhttp "github.com/minio/minio/internal/http"
+	"github.com/minio/minio/internal/logger"
 )
 
 var (
@@ -284,51 +286,87 @@ func ilmLimitNoncurrentVersions(ctx context.Context, objectAPI ObjectLayer, buck
 		return nil
 	}
 
+	// Allocate new results channel to receive ObjectInfo.
+	objInfoCh := make(chan ObjectInfo)
+
+	versioned := globalBucketVersioningSys.Enabled(bucket)
+	versionSuspended := globalBucketVersioningSys.Suspended(bucket)
+
+	nctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Walk through all objects
+	if err := objectAPI.Walk(nctx, bucket, object, objInfoCh, ObjectOptions{WalkVersions: versioned}); err != nil {
+		return err
+	}
+
 	var (
 		noncurrentVersions []ObjectToDelete
-		info               ListObjectVersionsInfo
-		keep               int
+		objects            []ObjectInfo
 	)
-	for {
-		info, err = objectAPI.ListObjectVersions(ctx, bucket, object, info.NextMarker, info.NextVersionIDMarker, "", 1000)
-		if err != nil {
-			return err
-		}
 
-		for _, objInfo := range info.Objects {
-			if objInfo.IsLatest {
-				continue // skip current version
-			}
-			keep++
-			if keep <= lim {
-				continue
-			}
-			noncurrentVersions = append(noncurrentVersions, ObjectToDelete{
-				ObjectName: objInfo.Name,
-				VersionID:  objInfo.VersionID,
-			})
-		}
-
-		if !info.IsTruncated {
+	rcfg, _ := globalBucketObjectLockSys.Get(bucket)
+	for obj := range objInfoCh {
+		if lim <= 0 {
+			cancel() // cancel walker.
 			break
 		}
+
+		if obj.IsLatest {
+			// We are not going to delete the latest object.
+			continue
+		}
+
+		// skip objects currently under retention
+		if rcfg.LockEnabled && enforceRetentionForDeletion(ctx, obj) {
+			continue
+		}
+
+		if lim > 0 {
+			noncurrentVersions = append(noncurrentVersions, ObjectToDelete{
+				ObjectName: obj.Name,
+				VersionID:  obj.VersionID,
+			})
+			objects = append(objects, obj)
+		}
+
+		lim--
 	}
 
-	if len(noncurrentVersions) == 0 {
-		return nil
-	}
+	cancel() // control reaches here means we are done with objectInfoCh.
 
-	_, errs := objectAPI.DeleteObjects(ctx, bucket, noncurrentVersions, ObjectOptions{
-		Versioned:        globalBucketVersioningSys.Enabled(bucket),
-		VersionSuspended: globalBucketVersioningSys.Suspended(bucket),
-	})
+	// Delete only supports upto 1000 versions at a time.
+	deleteVersions := func(toDelete []ObjectToDelete, objects []ObjectInfo) {
+		// Deletes a list of objects.
+		_, deleteErrs := objectAPI.DeleteObjects(ctx, bucket, toDelete, ObjectOptions{
+			Versioned:        versioned,
+			VersionSuspended: versionSuspended,
+		})
 
-	// return the first among possibly many errors simply to notify the
-	// caller that the call was not fully successful.
-	for _, delErr := range errs {
-		if delErr != nil {
-			return delErr
+		for i := range deleteErrs {
+			if deleteErrs[i] != nil {
+				logger.LogIf(ctx, deleteErrs[i])
+				continue
+			}
+			sendEvent(eventArgs{
+				EventName:  event.ObjectRemovedDelete,
+				BucketName: bucket,
+				Object:     objects[i],
+				Host:       "Internal: [ILM-EXPIRY]",
+			})
 		}
 	}
+
+	numKeys := len(noncurrentVersions)
+	for {
+		if numKeys < maxDeleteList {
+			deleteVersions(noncurrentVersions, objects)
+			break
+		}
+		deleteVersions(noncurrentVersions[:maxDeleteList], objects[:maxDeleteList])
+		noncurrentVersions = noncurrentVersions[maxDeleteList:]
+		objects = objects[maxDeleteList:]
+	}
+
 	return nil
 }
