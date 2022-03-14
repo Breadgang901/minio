@@ -150,8 +150,3 @@ func readDirWithOpts(dirPath string, opts readDirOpts) (entries []string, err er
 	}
 	return entries, nil
 }
-
-func globalSync() {
-	// no-op not sure about plan9/solaris support for syscall support
-	syscall.Sync()
-}

@@ -264,7 +264,3 @@ func readDirWithOpts(dirPath string, opts readDirOpts) (entries []string, err er
 
 	return
 }
-
-func globalSync() {
-	syscall.Sync()
-}

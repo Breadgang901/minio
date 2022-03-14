@@ -184,7 +184,3 @@ func readDirWithOpts(dirPath string, opts readDirOpts) (entries []string, err er
 
 	return entries, nil
 }
-
-func globalSync() {
-	// no-op on windows
-}

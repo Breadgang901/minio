@@ -92,8 +92,6 @@ type xlStorage struct {
 	diskPath string
 	endpoint Endpoint
 
-	globalSync bool
-
 	rootDisk bool
 
 	diskID string
@@ -234,13 +232,12 @@ func newXLStorage(ep Endpoint) (s *xlStorage, err error) {
 	}
 
 	s = &xlStorage{
-		diskPath:   path,
-		endpoint:   ep,
-		globalSync: globalFSOSync,
-		rootDisk:   rootDisk,
-		poolIndex:  -1,
-		setIndex:   -1,
-		diskIndex:  -1,
+		diskPath:  path,
+		endpoint:  ep,
+		rootDisk:  rootDisk,
+		poolIndex: -1,
+		setIndex:  -1,
+		diskIndex: -1,
 	}
 
 	go formatErasureCleanupTmp(s.diskPath) // cleanup any old data.
@@ -1185,16 +1182,6 @@ func (s *xlStorage) renameLegacyMetadata(volumeDir, path string) (err error) {
 	srcFilePath := pathJoin(filePath, xlStorageFormatFileV1)
 	dstFilePath := pathJoin(filePath, xlStorageFormatFile)
 
-	// Renaming xl.json to xl.meta should be fully synced to disk.
-	defer func() {
-		if err == nil {
-			if s.globalSync {
-				// Sync to disk only upon success.
-				globalSync()
-			}
-		}
-	}()
-
 	if err = Rename(srcFilePath, dstFilePath); err != nil {
 		switch {
 		case isSysErrNotDir(err):
@@ -2037,11 +2024,6 @@ func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, f
 				srcVolume, srcPath,
 				dstVolume, dstPath,
 				err))
-		}
-		if err == nil {
-			if s.globalSync {
-				globalSync()
-			}
 		}
 	}()
 
