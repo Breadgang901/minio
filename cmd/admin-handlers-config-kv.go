@@ -187,11 +187,22 @@ func (a adminAPIHandlers) GetConfigKVHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	cfg := globalServerConfig.Clone()
 	vars := mux.Vars(r)
-	buf := &bytes.Buffer{}
-	cw := config.NewConfigWriteTo(cfg, vars["key"])
-	if _, err := cw.WriteTo(buf); err != nil {
+	key := strings.TrimSpace(vars["key"])
+	if key == "" {
+		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, AdminError{
+			StatusCode: http.StatusBadRequest,
+			Message:    "Config 'key' cannot be empty",
+			Code:       "InvalidRequest",
+		}), r.URL)
+		return
+	}
+
+	_, envOnly := r.Form["env"]
+
+	var buf bytes.Buffer
+	cw := config.FilterByKey(globalServerConfig.Clone(), key, envOnly)
+	if _, err := cw.WriteTo(&buf); err != nil {
 		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 		return
 	}
@@ -340,10 +351,8 @@ func (a adminAPIHandlers) HelpConfigKVHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	vars := mux.Vars(r)
-
-	subSys := vars["subSys"]
-	key := vars["key"]
-
+	subSys := strings.TrimSpace(vars["subSys"])
+	key := strings.TrimSpace(vars["key"])
 	_, envOnly := r.Form["env"]
 
 	rd, err := GetHelp(subSys, key, envOnly)

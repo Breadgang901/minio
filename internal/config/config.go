@@ -456,13 +456,14 @@ func (c Config) RedactSensitiveInfo() Config {
 type configWriteTo struct {
 	Config
 	filterByKey string
+	envOnly     bool
 }
 
-// NewConfigWriteTo - returns a struct which
+// FilterByKey - returns a struct which
 // allows for serializing the config/kv struct
 // to a io.WriterTo
-func NewConfigWriteTo(cfg Config, key string) io.WriterTo {
-	return &configWriteTo{Config: cfg, filterByKey: key}
+func FilterByKey(cfg Config, key string, env bool) io.WriterTo {
+	return &configWriteTo{Config: cfg, filterByKey: key, envOnly: env}
 }
 
 // WriteTo - implements io.WriterTo interface implementation for config.
@@ -473,6 +474,20 @@ func (c *configWriteTo) WriteTo(w io.Writer) (int64, error) {
 	}
 	var n int
 	for _, target := range kvsTargets {
+		if c.envOnly {
+			for _, kv := range target.KVS {
+				envK := (EnvPrefix + strings.ToTitle(target.SubSystem) + EnvWordDelimiter + strings.ToTitle(kv.Key))
+				v := env.Get(envK, "")
+				n1, _ := w.Write([]byte(envK + "=" + v))
+				n2, _ := w.Write([]byte(KvNewline))
+				n += n1 + n2
+			}
+			if len(kvsTargets) > 1 {
+				n2, _ := w.Write([]byte(KvNewline))
+				n += n2
+			}
+			return int64(n), nil
+		}
 		m1, _ := w.Write([]byte(target.SubSystem))
 		m2, _ := w.Write([]byte(KvSpaceSeparator))
 		m3, _ := w.Write([]byte(target.KVS.String()))

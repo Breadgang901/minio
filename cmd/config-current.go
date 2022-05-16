@@ -781,8 +781,8 @@ func GetHelp(subSys, key string, envOnly bool) (Help, error) {
 		h = config.HelpKVS{value}
 	}
 
-	envHelp := config.HelpKVS{}
 	if envOnly {
+		envHelp := config.HelpKVS{}
 		// Only for multiple targets, make sure
 		// to list the ENV, for regular k/v EnableKey is
 		// implicit, for ENVs we cannot make it implicit.
@@ -805,6 +805,15 @@ func GetHelp(subSys, key string, envOnly bool) (Help, error) {
 			})
 		}
 		h = envHelp
+	} else {
+		if subSysHelp.MultipleTargets {
+			h = append(config.HelpKVS{config.HelpKV{
+				Key:         madmin.EnableKey,
+				Description: fmt.Sprintf("enable %s target, default is 'off'", subSys),
+				Optional:    false,
+				Type:        "on|off",
+			}}, h...)
+		}
 	}
 
 	return Help{

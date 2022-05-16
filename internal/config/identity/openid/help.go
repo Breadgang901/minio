@@ -27,19 +27,6 @@ var (
 
 	Help = config.HelpKVS{
 		config.HelpKV{
-			Key:         config.Enable,
-			Description: "Enable or disable OpenID",
-			Type:        "on|off",
-			Optional:    true,
-			Sensitive:   false,
-		},
-		config.HelpKV{
-			Key:         DisplayName,
-			Description: "Friendly display name for this Provider/App" + defaultHelpPostfix(DisplayName),
-			Optional:    true,
-			Type:        "string",
-		},
-		config.HelpKV{
 			Key:         ConfigURL,
 			Description: `openid discovery document e.g. "https://accounts.google.com/.well-known/openid-configuration"` + defaultHelpPostfix(ConfigURL),
 			Type:        "url",
@@ -57,6 +44,12 @@ var (
 		config.HelpKV{
 			Key:         RolePolicy,
 			Description: `Set the IAM access policies applicable to this client application and IDP e.g. "app-bucket-write,app-bucket-list"` + defaultHelpPostfix(RolePolicy),
+			Optional:    true,
+			Type:        "string",
+		},
+		config.HelpKV{
+			Key:         DisplayName,
+			Description: "Friendly display name for this Provider/App" + defaultHelpPostfix(DisplayName),
 			Optional:    true,
 			Type:        "string",
 		},
