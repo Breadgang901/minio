@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2021 MinIO, Inc.
+// Copyright (c) 2015-2023 MinIO, Inc.
 //
 // This file is part of MinIO Object Storage stack
 //
@@ -228,13 +228,13 @@ func (d *naughtyDisk) Delete(ctx context.Context, volume string, path string, de
 	return d.disk.Delete(ctx, volume, path, deleteOpts)
 }
 
-func (d *naughtyDisk) DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) []error {
+func (d *naughtyDisk) DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) ([]DeletedParts, []error) {
 	if err := d.calcError(); err != nil {
 		errs := make([]error, len(versions))
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return nil, errs
 	}
 	return d.disk.DeleteVersions(ctx, volume, versions)
 }

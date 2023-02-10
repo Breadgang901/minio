@@ -103,7 +103,7 @@ func TestFreeVersion(t *testing.T) {
 	tierfi.TransitionedObjName = mustGetUUID()
 	tierfi.TransitionTier = "MINIOTIER-1"
 	var err error
-	_, err = xl.DeleteVersion(tierfi)
+	_, _, err = xl.DeleteVersion(tierfi)
 	fatalErr(err)
 	report()
 
@@ -125,7 +125,7 @@ func TestFreeVersion(t *testing.T) {
 	newtierfi.TransitionStatus = ""
 	newtierfi.SetTierFreeVersionID(fvIDs[1])
 	report()
-	_, err = xl.DeleteVersion(newtierfi)
+	_, _, err = xl.DeleteVersion(newtierfi)
 	report()
 	fatalErr(err)
 
@@ -147,7 +147,7 @@ func TestFreeVersion(t *testing.T) {
 		vol          string
 		name         string
 		inclFreeVers bool
-		afterFn      func(fi FileInfo) (string, error)
+		afterFn      func(fi FileInfo) (string, []PartPlacement, error)
 		expectedFree bool
 		expectedErr  error
 	}{
@@ -187,7 +187,7 @@ func TestFreeVersion(t *testing.T) {
 			t.Fatalf("Expected free-version=%v but got free-version=%v", ft.expectedFree, got)
 		}
 		if ft.afterFn != nil {
-			_, err = ft.afterFn(fi)
+			_, _, err = ft.afterFn(fi)
 			if err != nil {
 				t.Fatalf("ft.afterFn failed with err %v", err)
 			}
@@ -198,7 +198,7 @@ func TestFreeVersion(t *testing.T) {
 	freefi := newtierfi
 	for _, fvID := range fvIDs {
 		freefi.VersionID = fvID
-		_, err = xl.DeleteVersion(freefi)
+		_, _, err = xl.DeleteVersion(freefi)
 		fatalErr(err)
 	}
 	report()

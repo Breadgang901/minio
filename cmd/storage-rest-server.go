@@ -665,10 +665,20 @@ func (s *storageRESTServer) DeleteFileHandler(w http.ResponseWriter, r *http.Req
 	}
 }
 
-// DeleteVersionsErrsResp - collection of delete errors
+// DeleteVersionsResp - collection of delete errors
 // for bulk version deletes
-type DeleteVersionsErrsResp struct {
-	Errs []error
+type DeleteVersionsResp struct {
+	DParts []DeletedParts
+	Errs   []error
+}
+
+// DeletedParts represents the permanent delete dataDir and its parts
+// of a given object and its version. This is returned via
+// DeleteVersions() storage API.
+type DeletedParts struct {
+	Name           string
+	DataDir        string
+	PartPlacements []PartPlacement
 }
 
 // DeleteVersionsHandler - delete a set of a versions.
@@ -694,19 +704,20 @@ func (s *storageRESTServer) DeleteVersionsHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	dErrsResp := &DeleteVersionsErrsResp{Errs: make([]error, totalVersions)}
+	dResp := &DeleteVersionsResp{Errs: make([]error, totalVersions)}
 
 	setEventStreamHeaders(w)
 	encoder := gob.NewEncoder(w)
 	done := keepHTTPResponseAlive(w)
-	errs := s.storage.DeleteVersions(r.Context(), volume, versions)
+	ddparts, errs := s.storage.DeleteVersions(r.Context(), volume, versions)
 	done(nil)
 	for idx := range versions {
 		if errs[idx] != nil {
-			dErrsResp.Errs[idx] = StorageErr(errs[idx].Error())
+			dResp.Errs[idx] = StorageErr(errs[idx].Error())
 		}
 	}
-	encoder.Encode(dErrsResp)
+	dResp.DParts = ddparts
+	encoder.Encode(dResp)
 }
 
 // RenameDataResp - RenameData()'s response.

@@ -435,7 +435,7 @@ func BenchmarkXlMetaV2Shallow(b *testing.B) {
 					// Update a random version.
 					fi.VersionID = ids[rng.Intn(size)]
 					// Delete...
-					_, err = xl.DeleteVersion(fi)
+					_, _, err = xl.DeleteVersion(fi)
 					if err != nil {
 						b.Fatal(err)
 					}

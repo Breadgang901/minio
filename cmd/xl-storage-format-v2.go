@@ -1320,7 +1320,7 @@ func (x *xlMetaV2) sortByModTime() {
 // DeleteVersion deletes the version specified by version id.
 // returns to the caller which dataDir to delete, also
 // indicates if this is the last version.
-func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
+func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, []PartPlacement, error) {
 	// This is a situation where versionId is explicitly
 	// specified as "null", as we do not save "null"
 	// string it is considered empty. But empty also
@@ -1334,7 +1334,7 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 	if fi.VersionID != "" {
 		uv, err = uuid.Parse(fi.VersionID)
 		if err != nil {
-			return "", errFileVersionNotFound
+			return "", nil, errFileVersionNotFound
 		}
 	}
 
@@ -1350,7 +1350,7 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 			WrittenByVersion: globalVersionUnix,
 		}
 		if !ventry.Valid() {
-			return "", errors.New("internal error: invalid version entry generated")
+			return "", nil, errors.New("internal error: invalid version entry generated")
 		}
 	}
 	updateVersion := false
@@ -1396,18 +1396,18 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 		case LegacyType:
 			ver, err := x.getIdx(i)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
 			x.versions = append(x.versions[:i], x.versions[i+1:]...)
 			if fi.Deleted {
 				err = x.addVersion(ventry)
 			}
-			return ver.ObjectV1.DataDir, err
+			return ver.ObjectV1.DataDir, nil, err
 		case DeleteType:
 			if updateVersion {
 				ver, err := x.getIdx(i)
 				if err != nil {
-					return "", err
+					return "", nil, err
 				}
 				if len(ver.DeleteMarker.MetaSys) == 0 {
 					ver.DeleteMarker.MetaSys = make(map[string][]byte)
@@ -1429,26 +1429,26 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 					ver.DeleteMarker.MetaSys[k] = []byte(v)
 				}
 				err = x.setIdx(i, *ver)
-				return "", err
+				return "", nil, err
 			}
 			var err error
 			x.versions = append(x.versions[:i], x.versions[i+1:]...)
 			if fi.MarkDeleted && (fi.VersionPurgeStatus().Empty() || (fi.VersionPurgeStatus() != Complete)) {
 				err = x.addVersion(ventry)
 			}
-			return "", err
+			return "", nil, err
 		case ObjectType, RemoteDataType:
 			if updateVersion && !fi.Deleted {
 				ver, err := x.getIdx(i)
 				if err != nil {
-					return "", err
+					return "", nil, err
 				}
 				ver.ObjectV2.MetaSys[VersionPurgeStatusKey] = []byte(fi.ReplicationState.VersionPurgeStatusInternal)
 				for k, v := range fi.ReplicationState.ResetStatusesMap {
 					ver.ObjectV2.MetaSys[k] = []byte(v)
 				}
 				err = x.setIdx(i, *ver)
-				return uuid.UUID(ver.ObjectV2.DataDir).String(), err
+				return uuid.UUID(ver.ObjectV2.DataDir).String(), ver.ObjectV2.PartPlacement, err
 			}
 		}
 	}
@@ -1459,7 +1459,7 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 		}
 		ver, err := x.getIdx(i)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		switch {
 		case fi.ExpireRestored:
@@ -1485,16 +1485,16 @@ func (x *xlMetaV2) DeleteVersion(fi FileInfo) (string, error) {
 		if x.SharedDataDirCount(ver.ObjectV2.VersionID, ver.ObjectV2.DataDir) > 0 {
 			// Found that another version references the same dataDir
 			// we shouldn't remove it, and only remove the version instead
-			return "", nil
+			return "", nil, nil
 		}
-		return uuid.UUID(ver.ObjectV2.DataDir).String(), err
+		return uuid.UUID(ver.ObjectV2.DataDir).String(), ver.ObjectV2.PartPlacement, err
 	}
 
 	if fi.Deleted {
 		err = x.addVersion(ventry)
-		return "", err
+		return "", nil, err
 	}
-	return "", errFileVersionNotFound
+	return "", nil, errFileVersionNotFound
 }
 
 // xlMetaDataDirDecoder is a shallow decoder for decoding object datadir only.

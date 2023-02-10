@@ -622,9 +622,9 @@ func (client *storageRESTClient) Delete(ctx context.Context, volume string, path
 }
 
 // DeleteVersions - deletes list of specified versions if present
-func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) (errs []error) {
+func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) (ddparts []DeletedParts, errs []error) {
 	if len(versions) == 0 {
-		return errs
+		return nil, errs
 	}
 
 	values := make(url.Values)
@@ -649,7 +649,7 @@ func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume stri
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return nil, errs
 	}
 
 	reader, err := waitForHTTPResponse(respBody)
@@ -657,22 +657,22 @@ func (client *storageRESTClient) DeleteVersions(ctx context.Context, volume stri
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return nil, errs
 	}
 
-	dErrResp := &DeleteVersionsErrsResp{}
-	if err = gob.NewDecoder(reader).Decode(dErrResp); err != nil {
+	dResp := &DeleteVersionsResp{}
+	if err = gob.NewDecoder(reader).Decode(dResp); err != nil {
 		for i := range errs {
 			errs[i] = err
 		}
-		return errs
+		return nil, errs
 	}
 
-	for i, dErr := range dErrResp.Errs {
+	for i, dErr := range dResp.Errs {
 		errs[i] = toStorageErr(dErr)
 	}
 
-	return errs
+	return dResp.DParts, errs
 }
 
 // RenameFile - renames a file.

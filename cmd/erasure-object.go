@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2021 MinIO, Inc.
+// Copyright (c) 2015-2023 MinIO, Inc.
 //
 // This file is part of MinIO Object Storage stack
 //
@@ -1356,23 +1356,9 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 		writeQuorums[i] = len(storageDisks)/2 + 1
 	}
 
-	infos := make([]ObjectInfo, len(objects))
 	versionsMap := make(map[string]FileInfoVersions, len(objects))
 
 	for i := range objects {
-		var err error
-		infos[i], _, err = er.getObjectInfoAndQuorum(ctx, bucket, objects[i].ObjectName, ObjectOptions{
-			VersionID:        objects[i].VersionID,
-			Versioned:        opts.Versioned,
-			VersionSuspended: opts.VersionSuspended,
-		})
-		if err != nil {
-			if !isErrMethodNotAllowed(err) && !isErrObjectNotFound(err) && !isErrVersionNotFound(err) {
-				errs[i] = err
-				continue
-			}
-		}
-
 		// Construct the FileInfo data that needs to be preserved on the disk.
 		vr := FileInfo{
 			Name:             objects[i].ObjectName,
@@ -1424,27 +1410,6 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 				ReplicationState:      vr.ReplicationState,
 			}
 		} else {
-			defer func() {
-				if errs[i] == nil && infos[i].DataDir != "" {
-					// deduplicate erasure sets to remove object from.
-					sets := make(map[*erasureObjects]struct{})
-
-					for _, part := range infos[i].Parts {
-						sets[er.setByIdx(part.Placement.setIdx())] = struct{}{}
-					}
-					var wg sync.WaitGroup
-					wg.Add(len(sets))
-					for set := range sets {
-						set := set
-						go func() {
-							defer wg.Done()
-							set.deleteAll(ctx, bucket, pathJoin(vr.Name, infos[i].DataDir))
-						}()
-					}
-					wg.Wait()
-				}
-			}()
-
 			dobjects[i] = DeletedObject{
 				ObjectName:       vr.Name,
 				VersionID:        vr.VersionID,
@@ -1462,6 +1427,9 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 	// Initialize list of errors.
 	delObjErrs := make([][]error, len(storageDisks))
 
+	var mapMutex sync.Mutex
+	deletedPartsMap := make(map[string][]DeletedParts)
+
 	var wg sync.WaitGroup
 	// Remove versions in bulk for each disk
 	for index, disk := range storageDisks {
@@ -1475,7 +1443,7 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 				}
 				return
 			}
-			errs := disk.DeleteVersions(ctx, bucket, dedupVersions)
+			ddparts, errs := disk.DeleteVersions(ctx, bucket, dedupVersions)
 			for i, err := range errs {
 				if err == nil {
 					continue
@@ -1490,9 +1458,53 @@ func (er erasureObjects) DeleteObjects(ctx context.Context, bucket string, objec
 					delObjErrs[index][v.Idx] = err
 				}
 			}
+			mapMutex.Lock()
+			for _, dpart := range ddparts {
+				if dparts, ok := deletedPartsMap[dpart.Name]; !ok {
+					deletedPartsMap[dpart.Name] = []DeletedParts{dpart}
+				} else {
+					dparts = append(dparts, dpart)
+					deletedPartsMap[dpart.Name] = dparts
+				}
+			}
+			mapMutex.Unlock()
 		}(index, disk)
 	}
 	wg.Wait()
+
+	defer func() {
+		for name, dparts := range deletedPartsMap {
+			// deduplicate erasure sets to remove object from.
+			sets := make(map[*erasureObjects][]string)
+
+			for _, part := range dparts {
+				dataDir := part.DataDir
+				for _, placement := range part.PartPlacements {
+					ddirs, ok := sets[er.setByIdx(placement.setIdx())]
+					if ok {
+						ddirs = append(ddirs, dataDir)
+					} else {
+						ddirs = []string{dataDir}
+					}
+					sets[er.setByIdx(placement.setIdx())] = ddirs
+				}
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(len(sets))
+			for set, dataDirs := range sets {
+				set := set
+				dataDirs := dataDirs
+				go func() {
+					defer wg.Done()
+					for _, dataDir := range dataDirs {
+						set.deleteAll(ctx, bucket, pathJoin(name, dataDir))
+					}
+				}()
+			}
+			wg.Wait()
+		}
+	}()
 
 	// Reduce errors for each object
 	for objIndex := range objects {

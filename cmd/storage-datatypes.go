@@ -102,8 +102,6 @@ func (f FileInfoVersions) Size() (size int64) {
 // FileInfoVersions represent a list of versions for a given file.
 // The above means that any added/deleted fields are incompatible.
 //
-// The above means that any added/deleted fields are incompatible.
-//
 //msgp:tuple FileInfoVersions
 type FileInfoVersions struct {
 	// Name of the volume.
