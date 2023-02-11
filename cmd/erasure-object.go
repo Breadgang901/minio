@@ -497,7 +497,8 @@ func (er erasureObjects) deleteIfDangling(ctx context.Context, bucket, object st
 				if disks[index] == nil {
 					return errDiskNotFound
 				}
-				return disks[index].DeleteVersion(ctx, bucket, object, fi, false)
+				_, err := disks[index].DeleteVersion(ctx, bucket, object, fi, false)
+				return err
 			}, index)
 		}
 
@@ -1308,7 +1309,7 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 	return fi.ToObjectInfo(bucket, object, opts.Versioned || opts.VersionSuspended), nil
 }
 
-func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object string, fi FileInfo, forceDelMarker bool) error {
+func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object string, fi FileInfo, forceDelMarker bool) (DeletedParts, error) {
 	disks := er.getDisks()
 	// Assume (N/2 + 1) quorum for Delete()
 	// this is a theoretical assumption such that
@@ -1318,6 +1319,8 @@ func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object
 	// for Read() requests alone that we already do.
 	writeQuorum := len(disks)/2 + 1
 
+	var mu sync.Mutex
+	dpartsMap := make(map[string][]DeletedParts)
 	g := errgroup.WithNErrs(len(disks))
 	for index := range disks {
 		index := index
@@ -1325,11 +1328,35 @@ func (er erasureObjects) deleteObjectVersion(ctx context.Context, bucket, object
 			if disks[index] == nil {
 				return errDiskNotFound
 			}
-			return disks[index].DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+			dparts, err := disks[index].DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			ddparts, ok := dpartsMap[dparts.DataDir]
+			if ok {
+				ddparts = append(ddparts, dparts)
+			} else {
+				dpartsMap[dparts.DataDir] = []DeletedParts{dparts}
+			}
+			mu.Unlock()
+			return nil
 		}, index)
 	}
+
+	err := reduceWriteQuorumErrs(ctx, g.Wait(), objectOpIgnoredErrs, writeQuorum)
+	if err != nil {
+		return DeletedParts{}, err
+	}
+
+	for _, ddparts := range dpartsMap {
+		if len(ddparts) >= writeQuorum {
+			return ddparts[0], nil
+		}
+	}
+
 	// return errors if any during deletion
-	return reduceWriteQuorumErrs(ctx, g.Wait(), objectOpIgnoredErrs, writeQuorum)
+	return DeletedParts{}, errErasureWriteQuorum
 }
 
 // DeleteObjects deletes objects/versions in bulk, this function will still automatically split objects list
@@ -1706,41 +1733,14 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	}
 	fvID := mustGetUUID()
 
-	if !deleteMarker {
-		defer func() {
-			if err != nil {
-				return
-			}
-			if goi.DataDir == "" {
-				return
-			}
-			// deduplicate erasure sets to remove object from.
-			sets := make(map[*erasureObjects]struct{})
-
-			for _, part := range goi.Parts {
-				sets[er.setByIdx(part.Placement.setIdx())] = struct{}{}
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(len(sets))
-			for set := range sets {
-				set := set
-				go func() {
-					defer wg.Done()
-					set.deleteAll(ctx, bucket, pathJoin(object, goi.DataDir))
-				}()
-			}
-			wg.Wait()
-		}()
-	}
-
+	var fi FileInfo
 	if markDelete && (opts.Versioned || opts.VersionSuspended) {
 		if !deleteMarker {
 			// versioning suspended means we add `null` version as
 			// delete marker, if its not decided already.
 			deleteMarker = opts.VersionSuspended && opts.VersionID == ""
 		}
-		fi := FileInfo{
+		fi = FileInfo{
 			Name:             object,
 			Deleted:          deleteMarker,
 			MarkDeleted:      markDelete,
@@ -1749,7 +1749,6 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 			TransitionStatus: opts.Transition.Status,
 			ExpireRestored:   opts.Transition.ExpireRestored,
 		}
-		fi.SetTierFreeVersionID(fvID)
 		if opts.VersionID != "" {
 			fi.VersionID = opts.VersionID
 		} else if opts.Versioned {
@@ -1759,27 +1758,46 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		// delete marker. Add delete marker, since we don't have
 		// any version specified explicitly. Or if a particular
 		// version id needs to be replicated.
-		if err = er.deleteObjectVersion(ctx, bucket, object, fi, opts.DeleteMarker); err != nil {
-			return objInfo, toObjectErr(err, bucket, object)
+	} else {
+		// Delete the object version on all disks.
+		fi = FileInfo{
+			Name:             object,
+			VersionID:        opts.VersionID,
+			MarkDeleted:      markDelete,
+			Deleted:          deleteMarker,
+			ModTime:          modTime,
+			ReplicationState: opts.DeleteReplication,
+			TransitionStatus: opts.Transition.Status,
+			ExpireRestored:   opts.Transition.ExpireRestored,
 		}
-		return fi.ToObjectInfo(bucket, object, opts.Versioned || opts.VersionSuspended), nil
 	}
 
-	// Delete the object version on all disks.
-	dfi := FileInfo{
-		Name:             object,
-		VersionID:        opts.VersionID,
-		MarkDeleted:      markDelete,
-		Deleted:          deleteMarker,
-		ModTime:          modTime,
-		ReplicationState: opts.DeleteReplication,
-		TransitionStatus: opts.Transition.Status,
-		ExpireRestored:   opts.Transition.ExpireRestored,
-	}
-	dfi.SetTierFreeVersionID(fvID)
-	if err = er.deleteObjectVersion(ctx, bucket, object, dfi, opts.DeleteMarker); err != nil {
+	fi.SetTierFreeVersionID(fvID)
+	dpart, err := er.deleteObjectVersion(ctx, bucket, object, fi, opts.DeleteMarker)
+	if err != nil {
 		return objInfo, toObjectErr(err, bucket, object)
 	}
+	defer func() {
+		if dpart.DataDir != "" {
+			// deduplicate erasure sets to remove object from.
+			sets := make(map[*erasureObjects]struct{})
+
+			for _, placement := range dpart.PartPlacements {
+				sets[er.setByIdx(placement.setIdx())] = struct{}{}
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(len(sets))
+			for set := range sets {
+				set := set
+				go func() {
+					defer wg.Done()
+					set.deleteAll(ctx, bucket, pathJoin(dpart.Name, dpart.DataDir))
+				}()
+			}
+			wg.Wait()
+		}
+	}()
 
 	for _, disk := range storageDisks {
 		if disk != nil && disk.IsOnline() {
@@ -1789,7 +1807,7 @@ func (er erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		break
 	}
 
-	return dfi.ToObjectInfo(bucket, object, opts.Versioned || opts.VersionSuspended), nil
+	return fi.ToObjectInfo(bucket, object, opts.Versioned || opts.VersionSuspended), nil
 }
 
 // Send the successful but partial upload/delete, however ignore
@@ -2060,7 +2078,7 @@ func (er erasureObjects) TransitionObject(ctx context.Context, bucket, object st
 
 	storageDisks := er.getDisks()
 
-	if err = er.deleteObjectVersion(ctx, bucket, object, fi, false); err != nil {
+	if _, err = er.deleteObjectVersion(ctx, bucket, object, fi, false); err != nil {
 		eventName = event.ObjectTransitionFailed
 	}
 

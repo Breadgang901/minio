@@ -414,7 +414,7 @@ func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, pat
 	return err
 }
 
-func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error {
+func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (DeletedParts, error) {
 	values := make(url.Values)
 	values.Set(storageRESTVolume, volume)
 	values.Set(storageRESTFilePath, path)
@@ -422,12 +422,19 @@ func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path
 
 	var buffer bytes.Buffer
 	if err := msgp.Encode(&buffer, &fi); err != nil {
-		return err
+		return DeletedParts{}, err
 	}
 
 	respBody, err := client.call(ctx, storageRESTMethodDeleteVersion, values, &buffer, -1)
+	if err != nil {
+		return DeletedParts{}, err
+	}
+	var dpart DeletedParts
+	if err = gob.NewDecoder(respBody).Decode(&dpart); err != nil {
+		return DeletedParts{}, err
+	}
 	defer xhttp.DrainBody(respBody)
-	return err
+	return dpart, nil
 }
 
 // WriteAll - write all data to a file.

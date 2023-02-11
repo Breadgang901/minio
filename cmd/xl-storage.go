@@ -1044,9 +1044,9 @@ func (s *xlStorage) moveToTrash(filePath string, recursive, force bool) error {
 
 // DeleteVersion - deletes FileInfo metadata for path at `xl.meta`. forceDelMarker
 // will force creating a new `xl.meta` to create a new delete marker
-func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error {
+func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (DeletedParts, error) {
 	if HasSuffix(path, SlashSeparator) {
-		return s.Delete(ctx, volume, path, DeleteOptions{
+		return DeletedParts{}, s.Delete(ctx, volume, path, DeleteOptions{
 			Recursive: false,
 			Force:     false,
 		})
@@ -1056,51 +1056,52 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 	buf, err := s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFile))
 	if err != nil {
 		if err != errFileNotFound {
-			return err
+			return DeletedParts{}, err
 		}
 		metaDataPoolPut(buf) // Never used, return it
 		if fi.Deleted && forceDelMarker {
 			// Create a new xl.meta with a delete marker in it
-			return s.WriteMetadata(ctx, volume, path, fi)
+			return DeletedParts{}, s.WriteMetadata(ctx, volume, path, fi)
 		}
 
 		buf, err = s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFileV1))
 		if err != nil {
 			if err == errFileNotFound && fi.VersionID != "" {
-				return errFileVersionNotFound
+				return DeletedParts{}, errFileVersionNotFound
 			}
-			return err
+			return DeletedParts{}, err
 		}
 		legacyJSON = true
 	}
 
 	if len(buf) == 0 {
 		if fi.VersionID != "" {
-			return errFileVersionNotFound
+			return DeletedParts{}, errFileVersionNotFound
 		}
-		return errFileNotFound
+		return DeletedParts{}, errFileNotFound
 	}
 
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
-		return err
+		return DeletedParts{}, err
 	}
 
 	if legacyJSON {
 		// Delete the meta file, if there are no more versions the
 		// top level parent is automatically removed.
-		return s.deleteFile(volumeDir, pathJoin(volumeDir, path), true, false)
+		return DeletedParts{}, s.deleteFile(volumeDir, pathJoin(volumeDir, path), true, false)
 	}
 
 	var xlMeta xlMetaV2
 	if err = xlMeta.LoadOrConvert(buf); err != nil {
-		return err
+		return DeletedParts{}, err
 	}
 
-	dataDir, _, err := xlMeta.DeleteVersion(fi)
+	dataDir, partPlacements, err := xlMeta.DeleteVersion(fi)
 	if err != nil {
-		return err
+		return DeletedParts{}, err
 	}
+	var dpart DeletedParts
 	if dataDir != "" {
 		versionID := fi.VersionID
 		if versionID == "" {
@@ -1117,13 +1118,16 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		// where we potentially leave "DataDir"
 		filePath := pathJoin(volumeDir, path, dataDir)
 		if err = checkPathLength(filePath); err != nil {
-			return err
+			return DeletedParts{}, err
 		}
 		if err = s.moveToTrash(filePath, true, false); err != nil {
 			if err != errFileNotFound {
-				return err
+				return DeletedParts{}, err
 			}
 		}
+		dpart.Name = path
+		dpart.DataDir = dataDir
+		dpart.PartPlacements = partPlacements
 	}
 
 	if len(xlMeta.versions) != 0 {
@@ -1131,19 +1135,19 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		buf, err = xlMeta.AppendTo(metaDataPoolGet())
 		defer metaDataPoolPut(buf)
 		if err != nil {
-			return err
+			return DeletedParts{}, err
 		}
 
-		return s.WriteAll(ctx, volume, pathJoin(path, xlStorageFormatFile), buf)
+		return dpart, s.WriteAll(ctx, volume, pathJoin(path, xlStorageFormatFile), buf)
 	}
 
 	// No more versions, this is the last version purge everything.
 	filePath := pathJoin(volumeDir, path)
 	if err = checkPathLength(filePath); err != nil {
-		return err
+		return DeletedParts{}, err
 	}
 
-	return s.deleteFile(volumeDir, filePath, true, false)
+	return dpart, s.deleteFile(volumeDir, filePath, true, false)
 }
 
 // Updates only metadata for a given version.

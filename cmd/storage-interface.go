@@ -79,7 +79,7 @@ type StorageAPI interface {
 	WalkDir(ctx context.Context, opts WalkDirOptions, wr io.Writer) error
 
 	// Metadata operations
-	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error
+	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (DeletedParts, error)
 	DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) ([]DeletedParts, []error)
 	WriteMetadata(ctx context.Context, volume, path string, fi FileInfo) error
 	UpdateMetadata(ctx context.Context, volume, path string, fi FileInfo) error
@@ -248,8 +248,8 @@ func (p *unrecognizedDisk) WriteAll(ctx context.Context, volume string, path str
 	return errDiskNotFound
 }
 
-func (p *unrecognizedDisk) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (err error) {
-	return errDiskNotFound
+func (p *unrecognizedDisk) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (dpart DeletedParts, err error) {
+	return DeletedParts{}, errDiskNotFound
 }
 
 func (p *unrecognizedDisk) UpdateMetadata(ctx context.Context, volume, path string, fi FileInfo) (err error) {

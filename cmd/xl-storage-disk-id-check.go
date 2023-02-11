@@ -446,10 +446,10 @@ func (p *xlStorageDiskIDCheck) WriteAll(ctx context.Context, volume string, path
 	return p.storage.WriteAll(ctx, volume, path, b)
 }
 
-func (p *xlStorageDiskIDCheck) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (err error) {
+func (p *xlStorageDiskIDCheck) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (dpart DeletedParts, err error) {
 	ctx, done, err := p.TrackDiskHealth(ctx, storageMetricDeleteVersion, volume, path)
 	if err != nil {
-		return err
+		return dpart, err
 	}
 	defer done(&err)
 

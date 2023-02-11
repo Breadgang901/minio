@@ -373,10 +373,13 @@ func (s *storageRESTServer) DeleteVersionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	err = s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
+	dpart, err := s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
 	if err != nil {
 		s.writeErrorResponse(w, err)
+		return
 	}
+
+	logger.LogIf(r.Context(), gob.NewEncoder(w).Encode(&dpart))
 }
 
 // ReadVersion read metadata of versionID
